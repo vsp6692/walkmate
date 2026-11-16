@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "mobile",
-    "slug": "mobile",
+    "name": "WalkMate",
+    "slug": "walkmate",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -20,6 +20,24 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow WalkMate to measure distance during your walk."
+        }
+      ],
+      "expo-router",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Allow WalkMate to record short voice clips you choose to transcribe.",
+          "enableBackgroundRecording": false,
+          "enableBackgroundPlayback": false
+        }
+      ]
+    ],
+    "scheme": "walkmate"
   }
 }

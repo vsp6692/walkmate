@@ -1,22 +1,17 @@
 {
-  "name": "mobile",
-  "version": "1.0.0",
-  "main": "index.ts",
-  "dependencies": {
-    "expo": "~58.0.25",
-    "expo-status-bar": "~58.0.5",
-    "react": "19.3.0",
-    "react-native": "0.88.1"
-  },
-  "devDependencies": {
-    "@types/react": "~19.3.0",
-    "typescript": "~6.0.3"
-  },
+  "name": "walkmate",
+  "private": true,
   "scripts": {
-    "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
-    "web": "expo start --web"
+    "start": "npm --prefix apps/mobile start",
+    "android": "npm --prefix apps/mobile run android",
+    "web": "npm --prefix apps/mobile run web",
+    "typecheck": "npm --prefix apps/mobile run typecheck",
+    "verify": "node scripts/verify.mjs",
+    "verify:all": "node scripts/verify.mjs --export",
+    "package:source": "python3 scripts/package-source.py",
+    "server": "node apps/server/server.mjs"
   },
-  "private": true
+  "engines": {
+    "node": ">=22.13.0"
+  }
 }
