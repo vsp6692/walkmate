@@ -18,7 +18,7 @@ npm start
 - Maya and Arjun, fictional original companions, with distinct configuration files.
 - Companion/activity/place-based palettes; no fixed green theme.
 - Free walks or 15–60 minute goals, pause/resume/finish, timer and optional foreground GPS distance with invalid-fix filtering.
-- Audio and animated-symbol views sharing a session; no lip sync or photorealistic video.
+- Audio and original illustrated-avatar views sharing a session; no lip sync or photorealistic video.
 - Optional coordinate destination with straight-line distance and explicit external OpenStreetMap handoff. No embedded map or walking navigation.
 - Four-chapter original offline virtual story, with optional installed-device-voice narration.
 - English and experimental Tamil speech previews gated by available voices; adjustable pace, reply length, energy and follow-up questions.
@@ -36,6 +36,9 @@ node --env-file=.env server.mjs
 ```
 
 The server defaults to loopback and is for development. Do not expose it publicly: it has no user authentication or production rate limiting. For physical-phone testing, deliberately bind a trusted LAN interface and use that computer address in the app. Plain HTTP is unencrypted; use HTTPS for sensitive traffic. No keys are needed for the offline features.
+
+## Optional walk recovery
+While a walk is active, explicitly save a recovery point to keep the current elapsed time, distance, companion and activity on this device. Saving again replaces it. From the home/summary screen, restore it paused or erase it. Recovery is a manual snapshot: it excludes subsequent movement and closed-app time, starts a fresh conversation, and does not restore the destination or time challenge. Recovery remains stored until erased, replaced or consumed by restoring, even if the original walk finishes. It is separate from saved history.
 
 ## Privacy behavior
 Location is used only after foreground permission. Coordinates and destination stay in memory, and are excluded from conversation and history payloads. Saved walk summaries contain date, companion, activity, duration and distance only. Temporary audio is deleted/revoked after upload or cancellation where the platform permits. Crash-time cleanup and native resource release still need device validation. Your configured remote providers may retain submitted text/audio according to their own policies. No background recording is enabled.
@@ -56,4 +59,14 @@ The tests exercise session timing, GPS filtering, history privacy, conversation 
 Full-duplex low-latency voice, hands-free reliability, background audio/GPS, embedded maps and verified routes, long-term memory, lip-synced avatars, multilingual quality validation, community packs and licensed celebrity experiences are unfinished. Tamil remains experimental. Original code is MIT licensed; dependencies retain their own licenses.
 
 ## Repeatable checks and source package
-From the root, run `npm run verify` for lint, type checking and all tests, or `npm run verify:all` to also export Android/iOS/web. These commands require Node 22.13+ and installed mobile dependencies. `npm run package:source` produces `artifacts/walkmate-source.zip`, preserving shared root files while excluding dependencies, git history, local environment files and builds. This is a source archive, not an installable APK.
+From the root, run `npm run verify` for lint, type checking and all tests, or `npm run verify:all` to also export Android/iOS/web. These commands require Node 22.13+ and installed mobile dependencies. Each run atomically updates `artifacts/verification.json` with timestamps, Node version, individual check results, durations and whether platform exports were requested. A failed run replaces the previous success record. The report explicitly leaves device/provider validation false; it describes that run and is not proof that later source edits were tested. `npm run package:source` produces `artifacts/walkmate-source.zip`, preserving shared root files while excluding dependencies, git history, local environment files and builds. This is a source archive, not an installable APK.
+
+## Walking milestones
+Outdoor sessions show optional time and distance milestones using the active-session timer and accepted foreground GPS samples. Time excludes pauses; GPS gaps are not reconstructed. Companion encouragement on these cards is original scripted text, not a model response. No counters are sent to an AI provider. Milestones are not route guidance, arrival confirmation or prescribed fitness targets.
+
+## Illustrated companions
+Avatar view uses original code-drawn Maya and Arjun portraits with decorative blinking and clothing colors from the selected scenario. Blinking stops while paused, backgrounded, or Reduce Motion is enabled. This is not video or synchronized lip animation; audio and avatar views retain the same session. Device and visual acceptance checks remain pending.
+
+Encouragement can be switched to “Keep it low-key” in setup. Factual milestones remain visible, but scripted encouragement is hidden and the model prompt requests no praise/coaching. “Let me lead” also removes follow-up questions from scripted milestone messages. Real-provider adherence still requires validation.
+
+If outdoor GPS setup stalls, it times out after 20 seconds while the session timer continues. Use Retry GPS to request another foreground watcher without resetting elapsed time or measured distance. This does not enable background tracking or reconstruct missing route segments.

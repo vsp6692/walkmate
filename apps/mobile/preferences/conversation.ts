@@ -3,12 +3,14 @@ export type ConversationPreferences = {
   length: "brief" | "balanced" | "story";
   energy: "gentle" | "balanced" | "lively";
   questions: boolean;
+  encouragement: boolean;
 };
 export const defaultConversation: ConversationPreferences = {
   rate: 0.9,
   length: "brief",
   energy: "balanced",
   questions: true,
+  encouragement: true,
 };
 export function conversationPreferences(raw: unknown): ConversationPreferences {
   const value =
@@ -24,5 +26,6 @@ export function conversationPreferences(raw: unknown): ConversationPreferences {
       ? (value.energy as ConversationPreferences["energy"])
       : "balanced",
     questions: typeof value.questions === "boolean" ? value.questions : true,
+    encouragement: typeof value.encouragement === "boolean" ? value.encouragement : true,
   };
 }

@@ -1,7 +1,7 @@
 import http from 'node:http';
 import {payload,reply} from './provider.mjs';
 import {MAX_AUDIO_BYTES,validateAudio,transcribe} from './transcription.mjs';
-export function createServer({conversation={},speech={},allowedOrigin='http://localhost:8081'}={},fetcher=fetch){
+export function createServer({conversation={},speech={},allowedOrigin='http://localhost:8082'}={},fetcher=fetch){
  return http.createServer(async(req,res)=>{
   const origin=req.headers.origin;
   if(origin&&origin!==allowedOrigin){res.writeHead(403).end();return;}
@@ -9,8 +9,8 @@ export function createServer({conversation={},speech={},allowedOrigin='http://lo
   res.setHeader('Vary','Origin');res.setHeader('Cache-Control','no-store');res.setHeader('Content-Type','application/json');
   if(req.method==='OPTIONS'){res.setHeader('Access-Control-Allow-Methods','POST, GET, OPTIONS');res.setHeader('Access-Control-Allow-Headers','Content-Type');res.writeHead(204).end();return;}
   const send=(code,data)=>{if(!res.destroyed)res.writeHead(code).end(JSON.stringify(data));};
-  const url=new URL(req.url,'http://localhost');
-  if(url.pathname==='/health'&&req.method==='GET'){send(200,{configured:!!(conversation.baseUrl&&conversation.model),transcription:!!(speech.baseUrl&&speech.model),speechLanguages:speech.baseUrl&&speech.model?['en','ta']:[]});return;}
+  let url;try{url=new URL(req.url,'http://localhost');}catch{send(400,{error:'Invalid request URL'});return;}
+  if(url.pathname==='/health'&&req.method==='GET'){send(200,{configured:!!(conversation.baseUrl&&conversation.model),transcription:!!(speech.baseUrl&&speech.model),acceptedLanguageHints:speech.baseUrl&&speech.model?['en','ta']:[],languageQualityVerified:false});return;}
   const audio=url.pathname==='/transcribe';
   if(!['/conversation','/transcribe'].includes(url.pathname)||req.method!=='POST'){send(404,{error:'Not found'});return;}
   const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),40000);

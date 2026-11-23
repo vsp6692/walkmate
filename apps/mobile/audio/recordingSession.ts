@@ -152,7 +152,7 @@ export class RecordingSession {
           this.update(
             "uploading",
             text
-              ? "Transcript added to draft. Review before sending."
+              ? "Transcript ready for review. Add it to your message when ready."
               : "No speech recognized.",
           );
         }

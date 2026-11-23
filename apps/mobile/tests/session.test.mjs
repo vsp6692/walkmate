@@ -74,3 +74,101 @@ test("cached and out-of-order GPS never poison accepted location anchor", () => 
     evaluateFix(rejected.anchor, fix(120000, 0.0001), 120000).meters > 10,
   );
 });
+
+import { WatchOwner } from "../session/watch.ts";
+test("stop releases a late native watcher and invalidates its callbacks", async () => {
+  const owner = new WatchOwner();
+  let resolve, current, removed = 0;
+  const setup = owner.start(check => {
+    current = check;
+    return new Promise(done => {resolve = done;});
+  }, () => assert.fail("unexpected error"));
+  owner.stop();
+  assert.equal(current(), false);
+  resolve({remove: () => removed++});
+  await setup;
+  assert.equal(removed, 1);
+  owner.stop();
+  assert.equal(removed, 1);
+});
+test("resume keeps only the newest watcher even if old setup finishes last", async () => {
+  const owner = new WatchOwner();
+  let resolve, oldRemoved = 0, newRemoved = 0;
+  const first = owner.start(() => new Promise(done => {resolve = done;}), () => assert.fail());
+  await owner.start(async () => ({remove: () => newRemoved++}), () => assert.fail());
+  resolve({remove: () => oldRemoved++});
+  await first;
+  assert.equal(oldRemoved, 1);
+  assert.equal(newRemoved, 0);
+  owner.stop();
+  owner.stop();
+  assert.equal(newRemoved, 1);
+});
+test("stale permission failures do not overwrite current GPS status", async () => {
+  const owner = new WatchOwner();
+  let reject, errors = 0;
+  const first = owner.start(() => new Promise((_, fail) => {reject = fail;}), () => errors++);
+  owner.stop();
+  reject(new Error("old request"));
+  await first;
+  assert.equal(errors, 0);
+  await owner.start(async () => {throw new Error("current request");}, () => errors++);
+  assert.equal(errors, 1);
+});
+
+import { recoveryPoint, readRecovery } from "../session/recovery.ts";
+test("recovery saves counters only, excluding destination, GPS, chat and audio", () => {
+  const candidate = {version:1, savedAt:"2026-11-16T05:00:00Z", companion:0, activity:0, seconds:600.9, meters:700, coordinates:[1,2], transcript:"private", audio:"private", destination:"home"};
+  assert.deepEqual(recoveryPoint(candidate), {version:1, savedAt:candidate.savedAt, companion:0, activity:0, seconds:600, meters:700});
+  for (const raw of ["corrupt", "null", JSON.stringify({...candidate, meters:-1}), JSON.stringify({...candidate, version:2}), JSON.stringify({...candidate, companion:99})]) assert.equal(readRecovery(raw), null);
+});
+test("recovery starts paused, excludes closed-app time and counts only resumed time", () => {
+  const clock = new SessionClock();
+  clock.restorePaused(600000);
+  assert.equal(clock.read(9000000),600000);
+  clock.resume(9000000);
+  assert.equal(clock.finish(9600000),1200000);
+  assert.throws(() => clock.restorePaused(NaN));
+  assert.throws(() => clock.restorePaused(-1));
+});
+
+test('GPS setup timeout invalidates callbacks and releases a late native subscription',async()=>{
+ const owner=new WatchOwner();let resolve,current,removed=0,errors=0,timeout;
+ const expired=new Promise(done=>{timeout=done;});
+ const setup=owner.start(check=>{current=check;return new Promise(done=>{resolve=done;});},()=>{errors++;timeout();},5);
+ await expired;
+ assert.equal(current(),false);assert.equal(errors,1);
+ resolve({remove:()=>removed++});await setup;
+ assert.equal(removed,1);assert.equal(errors,1);
+});
+test('GPS can retry after timeout without a stale failure affecting the new watcher',async()=>{
+ const owner=new WatchOwner();let reject,timeout,errors=0,removed=0;
+ const expired=new Promise(done=>{timeout=done;});
+ const first=owner.start(()=>new Promise((_,fail)=>{reject=fail;}),()=>{errors++;timeout();},5);
+ await expired;
+ await owner.start(async()=>({remove:()=>removed++}),()=>errors++);
+ reject(new Error('old native failure'));await first;
+ assert.equal(errors,1);assert.equal(removed,0);
+ owner.stop();assert.equal(removed,1);
+});
+
+import {SessionTransition} from '../session/transition.ts';
+test('pending recovery owns the session and blocks new starts and duplicate restores',()=>{
+ const transition=new SessionTransition();
+ assert.equal(transition.beginRestore(),true);
+ assert.equal(transition.start(),false);
+ assert.equal(transition.beginRestore(),false);
+ transition.completeRestore();transition.cancelRestore();
+ assert.equal(transition.snapshot(),'active');
+ assert.equal(transition.start(),false);
+ transition.finish();assert.equal(transition.start(),true);
+});
+test('failed restore releases ownership while active sessions cannot be overwritten',()=>{
+ const transition=new SessionTransition();let updates=0;
+ const unsubscribe=transition.subscribe(()=>updates++);
+ transition.beginRestore();transition.cancelRestore();
+ assert.equal(transition.start(),true);
+ assert.equal(transition.beginRestore(),false);
+ transition.cancelRestore();assert.equal(transition.snapshot(),'active');
+ assert.equal(updates,3);unsubscribe();transition.finish();assert.equal(updates,3);
+});

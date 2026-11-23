@@ -1,8 +1,12 @@
+import { abortable } from "./abortable.ts";
+import { conversationContext, type Turn } from "./context.ts";
+import { serverAddress } from "./endpoint.ts";
 import {
   conversationPreferences,
   type ConversationPreferences,
 } from "../preferences/conversation.ts";
-export type Turn = { role: "user" | "assistant"; content: string };
+export type { Turn } from "./context.ts";
+
 export class ConversationClient {
   private controller: AbortController | null = null;
   cancel() {
@@ -18,21 +22,14 @@ export class ConversationClient {
     preferences?: ConversationPreferences,
   ): Promise<string> {
     this.cancel();
-    const url = new URL(endpoint);
-    if (
-      !["http:", "https:"].includes(url.protocol) ||
-      url.username ||
-      url.password
-    )
-      throw new Error(
-        "Use an HTTP or HTTPS server URL without embedded credentials.",
-      );
+    const address = serverAddress(endpoint);
+    const context = conversationContext(messages);
     const controller = new AbortController();
     this.controller = controller;
     const timer = setTimeout(() => controller.abort(), 45000);
     try {
-      const response = await fetcher(
-        `${endpoint.replace(/\/$/, "")}/conversation`,
+      const response = await abortable(() => fetcher(
+        `${address}/conversation`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -41,12 +38,10 @@ export class ConversationClient {
             preferences: conversationPreferences(preferences),
             character,
             language,
-            messages: messages
-              .slice(-20)
-              .map(({ role, content }) => ({ role, content })),
+            messages: context,
           }),
         },
-      );
+      ), controller.signal, "Conversation interrupted.");
       if (controller.signal.aborted)
         throw new Error("Conversation interrupted.");
       if (!response.ok)
@@ -55,13 +50,15 @@ export class ConversationClient {
             ? "The server has no conversation provider configured."
             : `Conversation server returned ${response.status}.`,
         );
-      const data = await response.json();
+      const data = await abortable(() => response.json(), controller.signal, "Conversation interrupted.");
       if (controller.signal.aborted)
         throw new Error("Conversation interrupted.");
       if (
+        !data ||
+        typeof data !== "object" ||
         typeof data.reply !== "string" ||
         !data.reply.trim() ||
-        data.reply.length > 8000
+        data.reply.length > 4000
       )
         throw new Error("The server returned an invalid reply.");
       return data.reply;

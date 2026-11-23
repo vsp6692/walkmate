@@ -1,3 +1,4 @@
+import { abortable } from "./abortable.ts";
 /** Only store a service address, never credentials/query tokens/fragments. */
 export function serverAddress(input: string): string {
   let url: URL;
@@ -26,11 +27,13 @@ export async function serverHealth(
   fetcher: typeof fetch = fetch,
 ) {
   const address = serverAddress(input);
-  const result = await fetcher(`${address}/health`, { signal });
+  const result = await abortable(() => fetcher(`${address}/health`, { signal }), signal, "Connection check cancelled.");
   if (!result.ok) throw new Error(`Server check failed (${result.status}).`);
-  const data = await result.json();
+  const data = await abortable(() => result.json(), signal, "Connection check cancelled.");
   if (signal.aborted) throw new Error("Connection check cancelled.");
   if (
+    !data ||
+    typeof data !== "object" ||
     typeof data.configured !== "boolean" ||
     typeof data.transcription !== "boolean"
   )

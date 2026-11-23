@@ -11,6 +11,8 @@ import { File } from "expo-file-system";
 import { stopSpeech } from "../audio/speech";
 import { audioFocus } from "../audio/focus";
 import { RecordingSession } from "../audio/recordingSession";
+import { speechLanguage } from "../audio/languages";
+import { checkSpeechStatus } from "../audio/speechStatus";
 import { requestTranscription } from "../audio/transcription";
 import { ActionButton } from "./ActionButton";
 import type { Palette } from "../theme/scenario";
@@ -34,14 +36,7 @@ export function MicrophoneInput({
     () =>
       new RecordingSession({
         prepare: async (signal) => {
-          const health = await fetch(`${endpoint.replace(/\/$/, "")}/health`, {
-            signal,
-          });
-          const config = await health.json();
-          if (!health.ok || config.transcription !== true)
-            throw new Error(
-              "Speech recognition is not configured on this server.",
-            );
+          await checkSpeechStatus(endpoint, language, signal);
           if (signal.aborted) return;
           const permission =
             await AudioModule.requestRecordingPermissionsAsync();
@@ -86,13 +81,15 @@ export function MicrophoneInput({
               ? await (await fetch(path)).blob()
               : await new File(path).bytes();
           if (signal.aborted) throw new Error("Cancelled");
+          const selectedLanguage = speechLanguage(language);
+          if (!selectedLanguage) throw new Error("Unsupported speech language.");
           return requestTranscription(
             endpoint,
             data,
             Platform.OS === "web"
               ? (data as Blob).type || "audio/webm"
               : "audio/mp4",
-            language === "English" ? "en" : "ta",
+            selectedLanguage,
             signal,
           );
         },
@@ -135,7 +132,7 @@ export function MicrophoneInput({
         Record up to 30 seconds into temporary device storage. Nothing is
         uploaded until you choose “Send audio for transcription.” That sends
         audio to your server and speech provider. Their retention policy
-        applies. Review the transcript before sending it to your companion.
+        applies. The transcript appears separately for review before you add it to your message.
       </Text>
       {phase === "idle" && (
         <ActionButton

@@ -8,6 +8,12 @@ export class SessionClock {
     this.since = now;
     this.ended = false;
   }
+  restorePaused(elapsed: number) {
+    if (!Number.isFinite(elapsed) || elapsed < 0) throw new Error("Invalid elapsed time");
+    this.elapsed = elapsed;
+    this.since = null;
+    this.ended = false;
+  }
   read(now: number) {
     return (
       this.elapsed + (this.since === null ? 0 : Math.max(0, now - this.since))

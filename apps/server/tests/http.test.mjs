@@ -11,3 +11,8 @@ test('Whisper-compatible adapter forwards multipart audio without GPS or prompts
 test('HTTP transcription roundtrip and malformed JSON handled',async()=>{
  await serving({speech:{baseUrl:'http://provider/v1',model:'whisper'}},async url=>{const res=await fetch(url+'/transcribe?language=en',{method:'POST',headers:{'Content-Type':'audio/webm'},body:new Uint8Array([1])});assert.deepEqual(await res.json(),{text:'A test transcript'});assert.equal((await fetch(url+'/conversation',{method:'POST',body:'invalid'})).status,400);},async()=>({ok:true,json:async()=>({text:'A test transcript'})}));
 });
+test('current local browser origin is accepted and health does not claim verified languages',async()=>{
+ await serving({speech:{baseUrl:'http://provider/v1',model:'whisper'}},async url=>{
+ const response=await fetch(url+'/health',{headers:{Origin:'http://localhost:8082'}});assert.equal(response.status,200);assert.equal(response.headers.get('access-control-allow-origin'),'http://localhost:8082');const health=await response.json();assert.equal(health.languageQualityVerified,false);assert.equal(health.speechLanguages,undefined);assert.deepEqual(health.acceptedLanguageHints,['en','ta']);
+ });
+});

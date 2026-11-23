@@ -83,6 +83,12 @@ export function ConversationSettings({
           choose: () => onChange({ ...value, energy: x }),
         })),
       )}
+      {options("Encouragement", [
+        { label: "A little encouragement", selected: value.encouragement,
+          choose: () => onChange({ ...value, encouragement: true }) },
+        { label: "Keep it low-key", selected: !value.encouragement,
+          choose: () => onChange({ ...value, encouragement: false }) },
+      ])}
       {options("Follow-up questions", [
         {
           label: "Welcome questions",
@@ -98,7 +104,7 @@ export function ConversationSettings({
       <Text style={{ color: p.muted, fontSize: 12, lineHeight: 19 }}>
         Pace applies to device speech. Conversation style is sent to your
         configured AI provider with each message; results depend on that model.
-        Companions only speak when you ask.
+        Low-key mode hides scripted milestone encouragement while keeping time and distance facts. Companions only speak when you ask.
       </Text>
     </View>
   );

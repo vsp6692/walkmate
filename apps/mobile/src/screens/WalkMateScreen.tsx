@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
   Animated,
   AppState,
@@ -16,9 +16,12 @@ import { useReducedMotion } from "../../hooks/useReducedMotion";
 import { StatusBar } from "expo-status-bar";
 import * as Location from "expo-location";
 import { speakText, stopSpeech } from "../../audio/speech";
+import { PreferenceStore } from "../../preferences/store";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import maya from "../../../../characters/maya.json";
 import arjun from "../../../../characters/arjun.json";
+import { WatchOwner } from "../../session/watch";
+import { SessionTransition } from "../../session/transition";
 import { SessionClock } from "../../session/clock";
 import { evaluateFix } from "../../session/location";
 import {
@@ -31,6 +34,9 @@ import { ConversationPanel } from "../../components/ConversationPanel";
 import { ActionButton } from "../../components/ActionButton";
 import { useDeviceVoices } from "../../audio/useDeviceVoices";
 import { voiceFor } from "../../audio/voices";
+import { WalkRecovery } from "../../components/WalkRecovery";
+import { CompanionPortrait } from "../../components/CompanionPortrait";
+import { WalkMilestones } from "../../components/WalkMilestones";
 import { WalkHistory } from "../../components/WalkHistory";
 import type { WalkSummary } from "../../session/history";
 import { durations, type WalkDuration } from "../../adventures/plans";
@@ -41,7 +47,6 @@ import type { Destination, Coordinate } from "../../maps/destination";
 import { ConversationSettings } from "../../components/ConversationSettings";
 import {
   defaultConversation,
-  conversationPreferences,
 } from "../../preferences/conversation";
 const companions = [maya, arjun];
 const activities = [
@@ -58,7 +63,10 @@ const activities = [
     detail: "Let your imagination wander",
   },
 ];
+const preferenceStore = new PreferenceStore(AsyncStorage);
 export default function App() {
+  const [transition] = useState(() => new SessionTransition());
+  const transitionPhase = useSyncExternalStore(transition.subscribe, transition.snapshot, transition.snapshot);
   const [selected, setSelected] = useState(0),
     [activity, setActivity] = useState(0),
     [language, setLanguage] = useState("English");
@@ -71,13 +79,14 @@ export default function App() {
     [gps, setGps] = useState("GPS is off"),
     [speaking, setSpeaking] = useState(false),
     [ready, setReady] = useState(false);
+  const scrollView = useRef<React.ComponentRef<typeof ScrollView>>(null);
   const sessionClock = useRef(new SessionClock()),
-    subscription = useRef<Location.LocationSubscription | null>(null),
-    previous = useRef<Location.LocationObject | null>(null),
-    generation = useRef(0);
+    watcher = useRef(new WatchOwner()),
+    previous = useRef<Location.LocationObject | null>(null);
   const [destination, setDestination] = useState<Destination | null>(null);
   const [position, setPosition] = useState<Coordinate | null>(null);
   const [preferenceError, setPreferenceError] = useState("");
+  const [preferencesWritable, setPreferencesWritable] = useState(false);
   const [preferences, setPreferences] = useState(defaultConversation);
   const [duration, setDuration] = useState<WalkDuration>(0);
   const [finishedWalk, setFinishedWalk] = useState<WalkSummary | null>(null);
@@ -91,47 +100,42 @@ export default function App() {
   const reducedMotion = useReducedMotion();
   const compact = width < 390 || fontScale > 1.25;
   const s = makeStyles(scene.palette, compact);
+  // Reset only when changing screens, never on timer ticks, pause or avatar switches.
   useEffect(() => {
-    AsyncStorage.getItem("preferences")
-      .then((raw) => {
-        if (raw) {
-          const p = JSON.parse(raw);
-          setSelected(p.selected === 1 ? 1 : 0);
-          setPreferences(conversationPreferences(p.conversation));
-          if (durations.includes(p.duration)) setDuration(p.duration);
-          if (places.includes(p.place)) setPlace(p.place);
-          setActivity([0, 1, 2, 3].includes(p.activity) ? p.activity : 0);
-          setLanguage(
-            p.language === "Tamil · experimental" ? p.language : "English",
-          );
-        }
+    const frame = requestAnimationFrame(() => {
+      scrollView.current?.scrollTo({ x: 0, y: 0, animated: false });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [active, summary]);
+  useEffect(() => {
+    const owner = watcher.current;
+    let mounted = true;
+    preferenceStore.load()
+      .then((p) => {
+        if (!mounted) return;
+        setSelected(p.selected);
+        setPreferences(p.conversation);
+        setDuration(p.duration);
+        setPlace(p.place);
+        setActivity(p.activity);
+        setLanguage(p.language);
+        setPreferencesWritable(true);
       })
-      .catch(() => {})
-      .finally(() => setReady(true));
+      .catch(() => {
+        if (mounted) setPreferenceError("Saved preferences could not be loaded. You can use this session; automatic saving is paused. Reopen the app to retry or reset preferences below.");
+      })
+      .finally(() => { if (mounted) setReady(true); });
     return () => {
-      // Invalidate pending location requests using the latest generation at unmount.
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-      generation.current++;
-      subscription.current?.remove();
+      mounted = false;
+      owner.stop();
       stopSpeech();
     };
   }, []);
   useEffect(() => {
-    if (ready)
-      AsyncStorage.setItem(
-        "preferences",
-        JSON.stringify({
-          selected,
-          activity,
-          language,
-          place,
-          duration,
-          conversation: preferences,
-        }),
-      ).catch(() =>
-        setPreferenceError("Preferences could not be saved on this device."),
-      );
-  }, [selected, activity, language, place, duration, preferences, ready]);
+    if (ready && preferencesWritable)
+      preferenceStore.save({ selected, activity, language, place, duration, conversation: preferences })
+        .catch(() => setPreferenceError("Preferences could not be saved on this device."));
+  }, [selected, activity, language, place, duration, preferences, ready, preferencesWritable]);
   useEffect(() => {
     if (!active || paused) return;
     const tick = () => {
@@ -158,51 +162,44 @@ export default function App() {
         Animated.timing(pulse, {
           toValue: 1.05,
           duration: 1500,
-          useNativeDriver: true,
+          useNativeDriver: Platform.OS !== "web",
         }),
         Animated.timing(pulse, {
           toValue: 1,
           duration: 1500,
-          useNativeDriver: true,
+          useNativeDriver: Platform.OS !== "web",
         }),
       ]),
     );
     animation.start();
     return () => animation.stop();
   }, [pulse, reducedMotion, active, paused]);
-  useEffect(() => {
-    const listener = AppState.addEventListener("change", (state) => {
-      previous.current = null;
-      setPosition(null);
-      if (state !== "active") {
-        stopSpeech();
-        setSpeaking(false);
-      }
-    });
-    return () => listener.remove();
+  const stopTracking = useCallback(() => {
+    watcher.current.stop();
+    previous.current = null;
+    setPosition(null);
   }, []);
-  async function track() {
-    const token = ++generation.current;
+  const track = useCallback(async (requestPermission = true) => {
+    previous.current = null;
+    setPosition(null);
     setGps("Requesting location…");
-    try {
-      const permission = await Location.requestForegroundPermissionsAsync();
-      if (token !== generation.current) return;
+    await watcher.current.start(async (current) => {
+      const permission = requestPermission
+        ? await Location.requestForegroundPermissionsAsync()
+        : await Location.getForegroundPermissionsAsync();
+      if (!current()) return null;
       if (permission.status !== "granted") {
         setGps("Location declined · timer only");
-        return;
+        return null;
       }
-      const watch = await Location.watchPositionAsync(
+      const subscription = await Location.watchPositionAsync(
         {
           accuracy: Location.Accuracy.High,
           distanceInterval: 5,
           timeInterval: 3000,
         },
         (point) => {
-          if (
-            token !== generation.current ||
-            AppState.currentState !== "active"
-          )
-            return;
+          if (!current() || AppState.currentState !== "active") return;
           const fix = evaluateFix(previous.current, point, Date.now());
           if (!fix.accepted) {
             setPosition(null);
@@ -217,21 +214,34 @@ export default function App() {
           setMeters((value) => value + fix.meters);
           previous.current = point;
         },
+        () => {
+          if (!current()) return;
+          previous.current = null;
+          setPosition(null);
+          setGps("GPS signal unavailable · timer continues");
+        },
       );
-      if (token !== generation.current) watch.remove();
-      else subscription.current = watch;
-    } catch {
-      if (token === generation.current) setGps("GPS unavailable · timer only");
-    }
-  }
-  function stopTracking() {
-    generation.current++;
-    subscription.current?.remove();
-    subscription.current = null;
-    previous.current = null;
-    setPosition(null);
-  }
+      if (current() && !previous.current) setGps("Waiting for a fresh GPS signal");
+      return subscription;
+    }, () => setGps("GPS unavailable or setup timed out · timer only"));
+  }, []);
+  useEffect(() => {
+    const listener = AppState.addEventListener("change", (state) => {
+      if (state !== "active") {
+        stopTracking();
+        stopSpeech();
+        setSpeaking(false);
+        if (active && !paused && activity === 0)
+          setGps("GPS suspended · return to resume distance tracking");
+      } else if (active && !paused) {
+        setSeconds(Math.floor(sessionClock.current.read(performance.now()) / 1000));
+        if (activity === 0) void track(false);
+      }
+    });
+    return () => listener.remove();
+  }, [active, paused, activity, stopTracking, track]);
   function begin() {
+    if (!ready || !transition.start()) return;
     stopSpeech();
     setSpeaking(false);
     stopTracking();
@@ -263,6 +273,7 @@ export default function App() {
     }
   }
   function finish() {
+    transition.finish();
     setSeconds(
       Math.floor(sessionClock.current.finish(performance.now()) / 1000),
     );
@@ -312,6 +323,7 @@ export default function App() {
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
         <ScrollView
+          ref={scrollView}
           contentContainerStyle={s.page}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
@@ -327,6 +339,32 @@ export default function App() {
               </Text>
             </View>
           </View>
+          <WalkRecovery
+            transition={transition}
+            enabled={ready}
+            active={active}
+            palette={scene.palette}
+            snapshot={() => ({ version: 1, savedAt: new Date().toISOString(), companion: selected,
+              activity, seconds: sessionClock.current.read(performance.now()) / 1000, meters })}
+            onRestore={(point) => {
+              stopTracking();
+              stopSpeech();
+              setSpeaking(false);
+              sessionClock.current.restorePaused(point.seconds * 1000);
+              setSelected(point.companion);
+              setActivity(point.activity);
+              setSeconds(point.seconds);
+              setMeters(point.meters);
+              setPaused(true);
+              setActive(true);
+              setSummary(false);
+              setFinishedWalk(null);
+              setDestination(null);
+              setDuration(0);
+              setMode("Audio");
+              setGps("GPS paused · resume to request location");
+            }}
+          />
           {active ? (
             <>
               <Text style={s.eyebrow}>YOUR TIME, TOGETHER</Text>
@@ -346,14 +384,15 @@ export default function App() {
                     },
                   ]}
                 >
-                  <Text style={{ fontSize: 72 }}>
-                    {mode === "Audio" ? "♫" : companion.emoji}
-                  </Text>
+                  {mode === "Audio" ? <Text style={{ fontSize: 72 }}>♫</Text> :
+                    <CompanionPortrait character={companion.id} paused={paused}
+                      reducedMotion={reducedMotion} palette={scene.palette} />}
+
                 </Animated.View>
                 <Text style={s.cardTitle}>
                   {mode === "Audio"
                     ? "Enjoy the world around you."
-                    : `${companion.name} is here.`}
+                    : `${companion.name} · illustrated AI companion`}
                 </Text>
                 <Text style={s.muted}>
                   {paused
@@ -381,6 +420,12 @@ export default function App() {
                     : "Location tracking is off for this activity"}
                 </Text>
               </View>
+              {activity === 0 && (
+                <ActionButton palette={scene.palette} secondary
+                  label={gps === "Requesting location…" ? "Checking GPS…" : "Retry GPS"}
+                  disabled={paused || gps === "Requesting location…"}
+                  onPress={() => void track()} />
+              )}
               <View style={s.row}>
                 {["Audio", "Avatar"].map((x) => (
                   <Pressable
@@ -403,6 +448,10 @@ export default function App() {
                   paused={paused}
                   palette={scene.palette}
                 />
+              )}
+              {activity === 0 && (
+                <WalkMilestones preferences={preferences} seconds={seconds} meters={meters} companion={companion.id}
+                  paused={paused} palette={scene.palette} />
               )}
               {activity === 0 && destination && (
                 <DestinationProgress
@@ -478,6 +527,19 @@ export default function App() {
                   </Text>
                 </View>
                 <Text style={s.heroArt}>{scene.symbol}</Text>
+              </View>
+              <View style={s.settings}>
+                <Text style={s.activityTitle}>What you can try today</Text>
+                <Text style={s.muted}>
+                  Start a timed session, switch to an illustrated companion, or
+                  choose Virtual adventure for a scripted story. Outdoor distance
+                  needs location permission and a usable GPS signal.
+                </Text>
+                <Text style={s.muted}>
+                  Live AI chat and microphone transcription need a configured
+                  conversation server. Starting a session alone does not enable
+                  conversation. Voice previews use an installed device voice.
+                </Text>
               </View>
               <View style={s.sectionHeading}>
                 <Text style={s.sectionTitle}>01 Find your walking mate</Text>
@@ -655,7 +717,7 @@ export default function App() {
                 palette={scene.palette}
                 label={`Let’s go with ${companion.name}   ↗`}
                 onPress={begin}
-                disabled={!ready}
+                disabled={!ready || transitionPhase !== "idle"}
               />
               <Text style={s.note}>
                 Walk without an account. AI chat and voice transcription require
@@ -682,22 +744,26 @@ export default function App() {
             </Text>
             <Pressable
               accessibilityRole="button"
-              disabled={active}
+              disabled={active || !ready || transitionPhase === "restoring"}
               style={{
                 minHeight: 44,
                 justifyContent: "center",
                 opacity: active ? 0.45 : 1,
               }}
               onPress={async () => {
+                setReady(false);
                 try {
-                  await AsyncStorage.removeItem("preferences");
+                  await preferenceStore.reset();
                 } catch {
                   setPreferenceError(
                     "Could not reset saved preferences. Try again.",
                   );
+                  setReady(true);
                   return;
                 }
                 setPreferenceError("");
+                setPreferencesWritable(true);
+                setReady(true);
                 setSelected(0);
                 setDuration(0);
                 setPreferences(defaultConversation);

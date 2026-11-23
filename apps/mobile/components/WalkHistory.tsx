@@ -1,13 +1,11 @@
-import React, { useEffect, useState } from "react";
-import { Pressable, Text, View } from "react-native";
+import React, { useEffect, useRef, useState } from "react";
+import { Text, View } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import {
-  cleanSummary,
-  readHistory,
-  type WalkSummary,
-} from "../session/history";
+import type { WalkSummary } from "../session/history";
+import { HistoryStore } from "../session/historyStore";
+import { ActionButton } from "./ActionButton";
 import type { Palette } from "../theme/scenario";
-const key = "walkmate.walkSummaries.v1";
+const store = new HistoryStore(AsyncStorage);
 export function WalkHistory({
   candidate,
   palette: p,
@@ -19,70 +17,75 @@ export function WalkHistory({
     [busy, setBusy] = useState(true),
     [message, setMessage] = useState(""),
     [confirm, setConfirm] = useState(false);
+  const locked = useRef(true);
+  const [loadFailed, setLoadFailed] = useState(false);
   useEffect(() => {
     let mounted = true;
-    AsyncStorage.getItem(key)
-      .then((raw) => {
-        if (mounted) setItems(readHistory(raw));
+    store.load()
+      .then((items) => {
+        if (mounted) setItems(items);
       })
       .catch(() => {
-        if (mounted) setMessage("Could not read saved walks.");
+        if (mounted) {
+          setLoadFailed(true);
+          setMessage("Could not read saved walks. Retry loading, or explicitly erase them to start over.");
+        }
       })
       .finally(() => {
-        if (mounted) setBusy(false);
+        if (mounted) { locked.current = false; setBusy(false); }
       });
     return () => {
       mounted = false;
     };
   }, []);
   async function save() {
-    if (busy || !candidate) return;
-    const entry = cleanSummary(candidate);
-    if (!entry) return;
+    if (locked.current || loadFailed || !candidate) return;
+    locked.current = true;
     setBusy(true);
-    const next = [entry, ...items.filter((x) => x.id !== entry.id)].slice(
-      0,
-      50,
-    );
     try {
-      await AsyncStorage.setItem(key, JSON.stringify(next));
+      const next = await store.save(candidate);
       setItems(next);
       setMessage("Saved on this device.");
     } catch {
       setMessage("Could not save. Please try again.");
     } finally {
+      locked.current = false;
       setBusy(false);
     }
   }
   async function erase() {
-    if (busy) return;
+    if (locked.current) return;
+    locked.current = true;
     setBusy(true);
     try {
-      await AsyncStorage.removeItem(key);
+      await store.erase();
+      setLoadFailed(false);
       setItems([]);
       setConfirm(false);
       setMessage("Saved walks erased.");
     } catch {
       setMessage("Could not erase. Please try again.");
     } finally {
+      locked.current = false;
       setBusy(false);
     }
   }
-  const action = (label: string, handler: () => void) => (
-    <Pressable
-      accessibilityRole="button"
-      disabled={busy}
-      onPress={handler}
-      style={{
-        padding: 14,
-        borderRadius: 12,
-        backgroundColor: p.wash,
-        opacity: busy ? 0.5 : 1,
-      }}
-    >
-      <Text style={{ color: p.accent, fontWeight: "600" }}>{label}</Text>
-    </Pressable>
-  );
+  async function reload() {
+    if (locked.current) return;
+    locked.current = true;
+    setBusy(true);
+    try {
+      setItems(await store.load());
+      setLoadFailed(false);
+      setMessage("Saved walks loaded.");
+    } catch {
+      setLoadFailed(true);
+      setMessage("Could not read saved walks. Existing data was left unchanged.");
+    } finally {
+      locked.current = false;
+      setBusy(false);
+    }
+  }
   const saved = candidate && items.some((x) => x.id === candidate.id);
   return (
     <View
@@ -104,11 +107,13 @@ export function WalkHistory({
         companion, activity, time and distance. No GPS routes, recordings or
         conversations. Up to 50 walks.
       </Text>
+      {loadFailed && <ActionButton label="Retry loading saved walks" onPress={() => void reload()} disabled={busy} palette={p} secondary />}
       {candidate &&
+        !loadFailed &&
         !saved &&
-        action("Save this walk on my device", () => void save())}
+        <ActionButton label="Save this walk on my device" onPress={() => void save()} disabled={busy} palette={p} secondary />}
       {saved && <Text style={{ color: p.muted }}>This walk is saved.</Text>}
-      {items.length === 0 && (
+      {!loadFailed && items.length === 0 && (
         <Text style={{ color: p.muted }}>No saved walks yet.</Text>
       )}
       {items.map((item) => (
@@ -130,14 +135,14 @@ export function WalkHistory({
           </Text>
         </View>
       ))}
-      {items.length > 0 &&
+      {(items.length > 0 || loadFailed) &&
         (confirm ? (
           <>
-            {action("Confirm erase all saved walks", () => void erase())}
-            {action("Keep my walks", () => setConfirm(false))}
+            <ActionButton label="Confirm erase all saved walks" onPress={() => void erase()} disabled={busy} palette={p} secondary />
+            <ActionButton label="Keep my walks" onPress={() => setConfirm(false)} disabled={busy} palette={p} secondary />
           </>
         ) : (
-          action("Erase saved walks", () => setConfirm(true))
+          <ActionButton label="Erase saved walks" onPress={() => setConfirm(true)} disabled={busy} palette={p} secondary />
         ))}
       {!!message && (
         <Text accessibilityLiveRegion="polite" style={{ color: p.muted }}>

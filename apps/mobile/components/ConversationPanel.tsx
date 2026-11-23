@@ -8,6 +8,8 @@ import { AppState, Pressable, Text, TextInput, View } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { serverAddress, serverHealth } from "../conversation/endpoint";
 import { speakText, stopSpeech } from "../audio/speech";
+import { conversationContext } from "../conversation/context";
+import { appendTranscript } from "../conversation/draft";
 import { ConversationClient, type Turn } from "../conversation/client";
 import { useDeviceVoices } from "../audio/useDeviceVoices";
 import { voiceFor } from "../audio/voices";
@@ -36,12 +38,14 @@ export function ConversationPanel({
   const [endpoint, setEndpoint] = useState(""),
     [consent, setConsent] = useState(false),
     [draft, setDraft] = useState(""),
+    [pendingTranscript, setPendingTranscript] = useState(""),
     [turns, setTurns] = useState<Turn[]>([]),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   const [connection, setConnection] = useState("Not checked"),
     [checking, setChecking] = useState(false),
     [settingsReady, setSettingsReady] = useState(false);
+  const [readyAddress, setReadyAddress] = useState<string | null>(null);
   const healthRequest = useRef<AbortController | null>(null);
   const pendingMessage = useRef<{ text: string; previous: Turn[] } | null>(
     null,
@@ -69,9 +73,12 @@ export function ConversationPanel({
         if (mounted) setSettingsReady(true);
       });
     const current = client.current;
+    const requestGeneration = generation;
     return () => {
       mounted = false;
       healthRequest.current?.abort();
+      healthRequest.current = null;
+      requestGeneration.current++;
       current.cancel();
       stopSpeech();
     };
@@ -95,10 +102,10 @@ export function ConversationPanel({
     if (busy || paused || microphoneActive || !consent || !draft.trim()) return;
     const token = ++generation.current;
     pendingMessage.current = { text: draft.trim(), previous: turns };
-    const next = [
+    const next = conversationContext([
       ...turns,
       { role: "user" as const, content: draft.trim() },
-    ].slice(-20);
+    ]);
     setDraft("");
     setTurns(next);
     setBusy(true);
@@ -162,6 +169,7 @@ export function ConversationPanel({
     healthRequest.current?.abort();
     const controller = new AbortController();
     healthRequest.current = controller;
+    setReadyAddress(null);
     setChecking(true);
     setConnection("Checking server…");
     const timer = setTimeout(() => controller.abort(), 10000);
@@ -169,6 +177,7 @@ export function ConversationPanel({
       const result = await serverHealth(endpoint, controller.signal);
       if (healthRequest.current !== controller) return;
       setEndpoint(result.address);
+      setReadyAddress(result.conversation ? result.address : null);
       setConnection(
         `Server reachable · conversation ${result.conversation ? "configured" : "not configured"} · transcription ${result.transcription ? "configured" : "not configured"}. Provider quality is not verified.`,
       );
@@ -203,6 +212,7 @@ export function ConversationPanel({
   async function forget() {
     try {
       await AsyncStorage.removeItem("walkmate.serverAddress");
+      setReadyAddress(null);
       setEndpoint("");
       setConnection("Saved server address erased.");
     } catch {
@@ -225,8 +235,8 @@ export function ConversationPanel({
       <Text style={{ color: p.muted, fontSize: 12, lineHeight: 19 }}>
         Connect your own conversation server. Typed messages and recent replies
         are sent to that server and its configured AI provider. GPS is never
-        included. This app keeps the conversation in memory for this session
-        only. Provider retention depends on your provider.
+        included. This app keeps recent exchanges in memory for this session
+        only. Older exchanges leave the context as the conversation grows. Provider retention depends on your provider.
       </Text>
       {!consent ? (
         <>
@@ -242,6 +252,7 @@ export function ConversationPanel({
               healthRequest.current = null;
               setChecking(false);
               setConnection("Not checked");
+              setReadyAddress(null);
               setEndpoint(value);
             }}
             editable={settingsReady}
@@ -282,7 +293,12 @@ export function ConversationPanel({
             label="Allow sending this session’s messages"
             onPress={() => {
               try {
-                setEndpoint(serverAddress(endpoint));
+                const address = serverAddress(endpoint);
+                if (readyAddress !== address) {
+                  setError("Check this server and configure its conversation provider first.");
+                  return;
+                }
+                setEndpoint(address);
                 setConsent(true);
                 setError("");
               } catch (e) {
@@ -291,8 +307,11 @@ export function ConversationPanel({
                 );
               }
             }}
-            disabled={!endpoint.trim() || !settingsReady || checking}
+            disabled={!readyAddress || !settingsReady || checking}
           />
+          <Text style={{ color: p.muted }}>
+            Check the server before enabling chat. A reachable server still needs a configured conversation provider.
+          </Text>
           <Text style={{ color: p.muted }}>
             Checking only contacts the server’s health endpoint; no messages or
             GPS are sent. Hosted keys belong on the server, never in this
@@ -310,10 +329,28 @@ export function ConversationPanel({
           <MicrophoneInput
             endpoint={endpoint}
             language={language}
-            disabled={paused || busy}
-            onTranscript={setDraft}
+            disabled={paused || busy || !!pendingTranscript}
+            onTranscript={setPendingTranscript}
             palette={p}
           />
+          {!!pendingTranscript && (
+            <View style={{ gap: 10, padding: 14, borderWidth: 1, borderColor: p.line, borderRadius: 12 }}>
+              <Text style={{ color: p.ink, fontWeight: "600" }}>Review your transcript</Text>
+              <Text selectable style={{ color: p.ink, lineHeight: 23 }}>{pendingTranscript}</Text>
+              <Text style={{ color: p.muted }}>Your typed draft is unchanged. Add this text when ready, then review the message before sending.</Text>
+              <Action p={p} label="Add transcript to message" disabled={busy || paused || microphoneActive}
+                onPress={() => {
+                  try {
+                    setDraft(appendTranscript(draft, pendingTranscript));
+                    setPendingTranscript("");
+                    setError("");
+                  } catch (e) {
+                    setError(e instanceof Error ? e.message : "Could not add transcript.");
+                  }
+                }} />
+              <Action p={p} label="Discard transcript" onPress={() => setPendingTranscript("")} />
+            </View>
+          )}
           <TextInput
             accessibilityLabel="Message your companion"
             placeholder={paused ? "Resume your walk to chat" : "Say something…"}
@@ -344,6 +381,7 @@ export function ConversationPanel({
               interrupt();
               setTurns([]);
               setDraft("");
+              setPendingTranscript("");
               setConsent(false);
               setError("");
             }}

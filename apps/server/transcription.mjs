@@ -1,3 +1,4 @@
+import {providerJson} from './provider-response.mjs';
 export const MAX_AUDIO_BYTES=8*1024*1024;
 export const AUDIO_TYPES={'audio/mp4':'recording.m4a','audio/m4a':'recording.m4a','audio/webm':'recording.webm','audio/wav':'recording.wav','audio/mpeg':'recording.mp3'};
 export function validateAudio(bytes,mime,language){
@@ -9,8 +10,7 @@ export async function transcribe(bytes,mime,language,{baseUrl,model,apiKey},sign
  const type=validateAudio(bytes,mime,language),form=new FormData();
  form.append('file',new Blob([bytes],{type}),AUDIO_TYPES[type]);form.append('model',model);form.append('language',language);form.append('response_format','json');
  const response=await fetcher(`${baseUrl.replace(/\/$/,'')}/audio/transcriptions`,{method:'POST',headers:apiKey?{Authorization:`Bearer ${apiKey}`}:{},body:form,signal});
- if(!response.ok)throw new Error('Transcription provider failed');
- const data=await response.json();
- if(typeof data.text!=='string'||data.text.length>4000)throw new Error('Invalid transcript');
+ const data=await providerJson(response,signal);
+ if(!data||typeof data.text!=='string'||data.text.length>4000)throw new Error('Invalid transcript');
  return data.text.trim();
 }

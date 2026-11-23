@@ -1,28 +1,13 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import * as Speech from "expo-speech";
-import { type DeviceVoice } from "./voices";
+import { VoiceCatalog } from "./voiceCatalog";
 export function useDeviceVoices() {
-  const [voices, setVoices] = useState<DeviceVoice[]>([]),
-    [loading, setLoading] = useState(true),
-    [error, setError] = useState("");
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    try {
-      setVoices(await Speech.getAvailableVoicesAsync());
-      setError("");
-    } catch {
-      setVoices([]);
-      setError(
-        "Unable to check installed voices. You can still use text chat.",
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const [catalog] = useState(() => new VoiceCatalog(() => Speech.getAvailableVoicesAsync()));
+  const state = useSyncExternalStore(catalog.subscribe, catalog.snapshot, catalog.snapshot);
   useEffect(() => {
-    let mounted=true;
-    Speech.getAvailableVoicesAsync().then(result=>{if(mounted)setVoices(result);}).catch(()=>{if(mounted)setError("Unable to check installed voices. You can still use text chat.");}).finally(()=>{if(mounted)setLoading(false);});
-    return ()=>{mounted=false;};
-  }, []);
-  return { voices, loading, error, refresh };
+    catalog.activate();
+    void catalog.refresh();
+    return () => catalog.dispose();
+  }, [catalog]);
+  return { ...state, refresh: catalog.refresh };
 }
